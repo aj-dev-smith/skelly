@@ -1,72 +1,70 @@
 #include <ESP32Servo.h>
-#include <driver/dac.h>
+#include <WiFi.h>
+#include <Audio.h>
+
+// Wi-Fi credentials
+const char* ssid = "YOUR_SSID";
+const char* password = "YOUR_PASSWORD";
+
+// Audio settings
+AudioGeneratorMP3 *mp3;
+AudioFileSourceHTTPStream *file;
+AudioOutputI2S *out;
 
 Servo jawServo;
 
-const int JAW_OPEN = 25;
+// Jaw positions
 const int JAW_CLOSED = 0;
-const int SERVO_PIN = 4;        // GPIO4 for servo control
-const int DAC_PIN = 25;         // GPIO25 (DAC1) for audio output
+const int JAW_MAX_OPEN = 25;
+const int SERVO_PIN = 4;
+
+// Audio streaming URL
+const char* mp3URL = "http://www.example.com/laugh.mp3";
 
 void setup() {
   Serial.begin(115200);
 
-  // Initialize the servo
+  // Set up Wi-Fi connection
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi...");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println(" Connected!");
+
+  // Set up the servo
   jawServo.attach(SERVO_PIN);
   jawServo.write(JAW_CLOSED);
-  delay(500);
 
-  // Initialize DAC output
-  dac_output_enable(DAC_CHANNEL_1); // DAC_CHANNEL_1 corresponds to GPIO25
-}
+  // Set up audio output
+  out = new AudioOutputI2S(0, 1); // Using DAC channel 1 (GPIO 25)
+  out->SetGain(0.5); // Adjust volume as needed
 
-void playTone(int frequency, int duration) {
-  int sampleRate = 8000; // Sample rate in Hz
-  int samples = duration * (sampleRate / 1000); // Total number of samples
-  double increment = (2 * PI * frequency) / sampleRate;
-  double angle = 0;
+  // Set up audio file from HTTP stream
+  file = new AudioFileSourceHTTPStream(mp3URL);
+  mp3 = new AudioGeneratorMP3();
 
-  for (int i = 0; i < samples; i++) {
-    uint8_t dac_value = (uint8_t)((sin(angle) + 1) * 127); // Convert sine wave to 0-255
-    dac_output_voltage(DAC_CHANNEL_1, dac_value);
-    angle += increment;
-    delayMicroseconds(1000000 / sampleRate);
-  }
-}
-
-void stopTone() {
-  dac_output_voltage(DAC_CHANNEL_1, 128); // Midpoint voltage (no sound)
-}
-
-void simulateTalking() {
-  int movementPattern[] = {1, 0, 1, 0, 1, 1, 0, 1};
-  int patternLength = sizeof(movementPattern) / sizeof(movementPattern[0]);
-
-  for (int i = 0; i < patternLength; i++) {
-    if (movementPattern[i] == 1) {
-      // Open the jaw and play a tone
-      jawServo.write(JAW_OPEN);
-      playTone(1000, 200);  // Play a 1000 Hz tone for 200 ms
-    } else {
-      // Close the jaw and stop the tone
-      jawServo.write(JAW_CLOSED);
-      stopTone();
-      delay(200); // Pause for 200 ms
-    }
-
-    // Add a random delay to make the movement look natural
-    delay(random(100, 300));
-  }
+  mp3->begin(file, out);
 }
 
 void loop() {
-  Serial.println("Start Talking");
+  if (mp3->isRunning()) {
+    if (!mp3->loop()) {
+      mp3->stop();
+    } else {
+      // Get current volume level
+      int level = out->getLevel(); // Assuming getLevel() gives audio amplitude level
+      
+      // Map volume level to jaw position
+      int jawPosition = map(level, 0, 1023, JAW_CLOSED, JAW_MAX_OPEN);
+      jawServo.write(jawPosition);
 
-  // Simulate talking by moving the jaw and playing tones
-  simulateTalking();
-
-  // Wait before repeating
-  delay(2000);
-
-  Serial.println("Talked");
+      delay(10); // Small delay to avoid overwhelming the servo
+    }
+  } else {
+    Serial.println("Playback finished, restarting...");
+    delay(2000);
+    mp3->begin(file, out);
+  }
 }
